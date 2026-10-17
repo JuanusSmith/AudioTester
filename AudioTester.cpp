@@ -30,6 +30,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <tchar.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include "decoders.h"
 #include "stream.h"
 #include <FLAC/format.h>
@@ -39,6 +40,13 @@ OTHER DEALINGS IN THE SOFTWARE.
 using namespace std;
 
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#pragma comment(lib,"shlwapi.lib")
+
+// Sorts results the way Explorer does: ignoring case, with numbers in numeric order
+struct PathLess
+{
+	bool operator()(const wstring& a, const wstring& b) const { return StrCmpLogicalW(a.c_str(), b.c_str()) < 0; }
+};
 
 #define WINDOWTITLE					_TEXT("AudioTester")
 #define STR_ABOUT						_TEXT("AudioTester version 1.7.1 (unofficial build)\r\nCopyright © 2015 James Chapman \r\nhttp://www.vuplayer.com\r\nUpdated 2026 with bug fixes and current codec libraries\r\n")
@@ -114,7 +122,7 @@ wstring g_text;
 wchar_t g_buf[MAXTEXT];
 list<wstring> g_list;
 list<wstring> g_passes;
-map<wstring, wstring> g_errors;
+map<wstring, wstring, PathLess> g_errors;
 WNDPROC g_editproc;
 HFONT g_font;
 int g_dpi=96;
@@ -357,7 +365,7 @@ void SetText(wchar_t* filename, wchar_t* error)
 		g_text = g_buf;
 		swprintf_s(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%zu %s %s"), g_errors.size(), (g_errors.size() == 1) ? (STR_FILE) : (STR_FILES), STR_ERROR);
 		g_text += g_buf;
-		for (map<wstring, wstring>::const_iterator i = g_errors.begin(); i != g_errors.end(); i++)
+		for (map<wstring, wstring, PathLess>::const_iterator i = g_errors.begin(); i != g_errors.end(); i++)
 		{
 			g_text += _TEXT("\r\n");
 			g_text += (*i).first;
@@ -370,7 +378,7 @@ void SetText(wchar_t* filename, wchar_t* error)
 		}
 		swprintf_s(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%zu %s %s"), g_passes.size(), (g_passes.size() == 1) ? (STR_FILE) : (STR_FILES), STR_PASS);
 		g_text += g_buf;
-		g_passes.sort();
+		g_passes.sort(PathLess());
 		for (list<wstring>::const_iterator i = g_passes.begin(); i != g_passes.end(); i++)
 		{
 			g_text += _TEXT("\r\n");
