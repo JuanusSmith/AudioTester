@@ -100,4 +100,6 @@ Earlier versions (1.0 to 1.7, 2007 to 2015) are listed in [ORIGINAL_README.txt](
 
 ## License
 
-MIT. See [LICENSE](LICENSE). The original copyright belongs to James Chapman (2015). The codec libraries are separate works under their own BSD-style licenses.
+MIT. See [LICENSE](LICENSE). The original copyright belongs to James Chapman (2015).
+
+The codec libraries the program links against are separate works under their own BSD-style licenses: libogg and libvorbis (Xiph.Org Foundation), libFLAC (Josh Coalson and Xiph.Org Foundation) and WavPack (Conifer Software). `md5.c` and `md5.h` are by L. Peter Deutsch (Aladdin Enterprises), under the zlib-style license in their headers.

@@ -23,11 +23,3 @@ HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
-
----
-
-The codec libraries this program links against are separate works under
-their own licenses: libogg and libvorbis (BSD-style, Xiph.Org Foundation),
-libFLAC (BSD-style, Josh Coalson and Xiph.Org Foundation) and WavPack
-(BSD-style, Conifer Software). md5.c and md5.h are by L. Peter Deutsch,
-Aladdin Enterprises, under the zlib-style license in their headers.
