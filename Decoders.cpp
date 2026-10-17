@@ -3,6 +3,9 @@
 #include "OggDecoder.h"
 #include "FlacDecoder.h"
 #include "WvDecoder.h"
+#include <wctype.h>
+
+using namespace std;
 
 bool CDecoder::m_usemem=0;
 
@@ -53,10 +56,9 @@ CDecoder* CDecoders::FindDecoder(const wchar_t* filename)
 	const wchar_t* a=wcsrchr(filename,'.');
 	if(!a++)
 		return 0;
-	for(map<wstring,CDecoder*>::const_iterator i=m_map.begin();i!=m_map.end();i++)
-	{
-		if(!_wcsicmp((*i).first.c_str(),a))
-			return (*i).second;
-	}
-	return 0;
+	wstring ext(a);
+	for(size_t i=0;i<ext.size();i++)
+		ext[i]=towlower(ext[i]);
+	map<wstring,CDecoder*>::const_iterator i=m_map.find(ext);
+	return (i!=m_map.end())?(*i).second:0;
 }

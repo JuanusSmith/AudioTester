@@ -27,11 +27,13 @@ long tell_func(void *datasource)
 COggDecoder::COggDecoder()
 {
 	m_opened=0;
+	m_error[0]=0;
 }
 
 COggDecoder::COggDecoder(const wchar_t* filename)
 {
 	m_opened=0;
+	m_error[0]=0;
 	m_callback.close_func=close_func;
 	m_callback.read_func=read_func;
 	m_callback.seek_func=seek_func;
@@ -91,19 +93,26 @@ long COggDecoder::Read()
 	case OV_HOLE:
 		{
 			float f=(float)ov_time_tell(&m_vf);
-			swprintf(m_error,MAXERROR,L"OV_HOLE @ %dm %02ds",((int)f)/60,((int)f)%60);
+			swprintf_s(m_error,MAXERROR,L"OV_HOLE @ %dm %02ds",((int)f)/60,((int)f)%60);
 		}
 		return -1;
 	case OV_EBADLINK:
 		{
 			float f=(float)ov_time_tell(&m_vf);
-			swprintf(m_error,MAXERROR,L"OV_EBADLINK @ %dm %02ds",((int)f)/60,((int)f)%60);
+			swprintf_s(m_error,MAXERROR,L"OV_EBADLINK @ %dm %02ds",((int)f)/60,((int)f)%60);
 		}
 		return -1;
 	case 0:
 		if(!m_vf.os.e_o_s)
 		{
 			wcscpy_s(m_error,MAXERROR,L"TRUNCATED");
+			return -1;
+		}
+		break;
+	default:
+		if(i<0)
+		{
+			swprintf_s(m_error,MAXERROR,L"DECODE ERROR (%ld)",i);
 			return -1;
 		}
 	}

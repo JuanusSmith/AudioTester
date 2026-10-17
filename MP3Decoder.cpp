@@ -3,6 +3,7 @@
 CMP3Decoder::CMP3Decoder()
 {
 	m_opened=0;
+	m_error[0]=0;
 }
 
 CMP3Decoder::CMP3Decoder(const wchar_t* filename)
@@ -130,7 +131,7 @@ long CMP3Decoder::Read()
 int CMP3Decoder::GetHeaderLength()		// Check for ID3v2 tag
 {
 	int i=0;
-	char buf[10];
+	unsigned char buf[10];	// Unsigned, so the size bytes and the <0x80 checks work for bytes >=0x80
 	if(m_stream.Read(buf,10)==10)
 	{
 		if((buf[0]=='I')&&(buf[1]=='D')&&(buf[2]=='3'))
@@ -305,33 +306,26 @@ int CMP3Decoder::GetFrameLength()
 
 bool CMP3Decoder::Resync()
 {
-	m_header=0;
-	m_framelength=0;
-	while(!m_framelength&&--m_resync)
+	// A loop rather than recursion, so junk data with many false frame headers can't overflow the stack
+	for(;;)
 	{
-		m_header<<=8;
-		if(m_stream.Read((unsigned char*)&m_header,1))
-			m_framelength=GetFrameLength();
-		else
-			return 0;
-	}
-	if(m_framelength)
-	{
-		if(m_lastheader)
+		m_header=0;
+		m_framelength=0;
+		while(!m_framelength&&--m_resync)
 		{
-			if((m_header&0xfffe0c00)==(m_lastheader&0xfffe0c00))
-				return 1;
+			m_header<<=8;
+			if(m_stream.Read((unsigned char*)&m_header,1))
+				m_framelength=GetFrameLength();
 			else
-				return Resync();
+				return 0;
 		}
-		else
-		{
+		if(!m_framelength)
+			return 0;
+		if(!m_lastheader)
 			m_lastheader=m_header;
-			return Resync();
-		}
+		else if((m_header&0xfffe0c00)==(m_lastheader&0xfffe0c00))
+			return 1;
 	}
-	else
-		return 0;
 }
 
 bool CMP3Decoder::CheckCRC()
@@ -343,7 +337,7 @@ bool CMP3Decoder::CheckCRC()
 		{
 			float f=(float)m_samplepos;
 			f/=m_rate;
-			swprintf(m_error,MAXERROR,L"CRC ERROR @ %dm %02ds",((int)f)/60,((int)f)%60);
+			swprintf_s(m_error,MAXERROR,L"CRC ERROR @ %dm %02ds",((int)f)/60,((int)f)%60);
 			return 0;
 		}
 	}

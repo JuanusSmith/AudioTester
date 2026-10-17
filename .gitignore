@@ -7,3 +7,6 @@ vcpkg_installed/
 .vs/
 *.user
 *.aps
+*.log
+tests/build/
+tests/data/

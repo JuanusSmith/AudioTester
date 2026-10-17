@@ -20,6 +20,6 @@ private:
 	FILE* m_file;
 	bool m_eof;
 	unsigned char* m_buffer;
-	unsigned long m_bufsize;
-	unsigned long m_bufpos;
+	__int64 m_bufsize;
+	__int64 m_bufpos;
 };

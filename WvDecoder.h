@@ -38,7 +38,7 @@ private:
 	CStream m_stream;
 	CStream m_stream2;
 	WavpackContext* m_wpc;
-	WavpackStreamReader m_reader;
+	WavpackStreamReader64 m_reader;
 
 	void CloseFiles();
 	void UpdateMD5(long count);

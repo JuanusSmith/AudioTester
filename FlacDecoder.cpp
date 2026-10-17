@@ -3,6 +3,7 @@
 CFlacDecoder::CFlacDecoder()
 {
 	m_opened=0;
+	m_str[0]=0;
 }
 
 CFlacDecoder::~CFlacDecoder()
@@ -18,6 +19,10 @@ CFlacDecoder::CFlacDecoder(const wchar_t* filename)
 {
 	m_opened=0;
 	m_error=0;
+	m_str[0]=0;
+	m_rate=0;
+	m_samples=0;
+	m_count=0;
 	if(m_stream.Open(filename,m_usemem))
 	{
 		set_md5_checking(true);
@@ -93,14 +98,19 @@ long CFlacDecoder::Read()
 	{
 		if(get_state()==FLAC__STREAM_DECODER_END_OF_STREAM)
 		{
-			if(!finish())
+			if(!m_rate)	// Never saw a STREAMINFO block, e.g. an empty file
+			{
+				m_framesize=-1;
+				wcscpy_s(m_str,MAXERROR,L"NO FLAC STREAM FOUND");
+			}
+			else if(!finish())
 			{
 				m_framesize=-1;
 				wcscpy_s(m_str,MAXERROR,L"MD5_MISMATCH");
 			}
 			else
 			{
-				if(m_count!=m_samples)
+				if(m_samples&&m_count!=m_samples)	// A total of 0 in STREAMINFO means unknown, so can't be checked
 				{
 					m_framesize=-1;
 					if(m_count<m_samples)
@@ -175,7 +185,7 @@ void CFlacDecoder::metadata_callback(const FLAC__StreamMetadata * metadata)
 void CFlacDecoder::error_callback(FLAC__StreamDecoderErrorStatus error)
 {
 	m_error=1;
-	unsigned int i=m_rate?(unsigned int)m_count/m_rate:0;
+	unsigned int i=m_rate?(unsigned int)(m_count/m_rate):0;
 	switch(error)
 	{
 	case FLAC__STREAM_DECODER_ERROR_STATUS_LOST_SYNC:
@@ -189,11 +199,20 @@ void CFlacDecoder::error_callback(FLAC__StreamDecoderErrorStatus error)
 		break;
 	case FLAC__STREAM_DECODER_ERROR_STATUS_UNPARSEABLE_STREAM:
 		wcscpy_s(m_str,MAXERROR,L"UNPARSEABLE_STREAM");
+		break;
+	case FLAC__STREAM_DECODER_ERROR_STATUS_BAD_METADATA:
+		wcscpy_s(m_str,MAXERROR,L"BAD_METADATA");
+		break;
+	case FLAC__STREAM_DECODER_ERROR_STATUS_OUT_OF_BOUNDS:
+		swprintf_s(m_str,MAXERROR,L"OUT_OF_BOUNDS @ %dm %02ds",i/60,i%60);
+		break;
+	default:
+		swprintf_s(m_str,MAXERROR,L"DECODER_ERROR (%d)",(int)error);
 	}
 }
 
 void CFlacDecoder::Truncated()
 {
-	unsigned int i=m_rate?(unsigned int)m_count/m_rate:0;
+	unsigned int i=m_rate?(unsigned int)(m_count/m_rate):0;
 	swprintf_s(m_str,MAXERROR,L"TRUNCATED @ %dm %02ds",i/60,i%60);
 }

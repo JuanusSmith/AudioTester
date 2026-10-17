@@ -1,6 +1,6 @@
-/*
+ï»¿/*
 AudioTester v1.7
-Copyright © 2015 James Chapman
+Copyright Â© 2015 James Chapman
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation
@@ -32,11 +32,16 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <shellapi.h>
 #include "decoders.h"
 #include "stream.h"
+#include <FLAC/format.h>
+#include <vorbis/codec.h>
+#include <wavpack/wavpack.h>
+
+using namespace std;
 
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #define WINDOWTITLE					_TEXT("AudioTester")
-#define STR_ABOUT						_TEXT("AudioTester version 1.7\r\nCopyright © 2015 James Chapman \r\nhttp://www.vuplayer.com\r\n")
+#define STR_ABOUT						_TEXT("AudioTester version 1.7.1 (unofficial build)\r\nCopyright Â© 2015 James Chapman \r\nhttp://www.vuplayer.com\r\nUpdated 2026 with bug fixes and current codec libraries\r\n")
 #define STR_ABOUTMENU				_TEXT("About AudioTester")
 #define STR_START						_TEXT("Drop files/folders here")
 #define STR_FILEERROR				_TEXT("UNABLE TO OPEN DECODER")
@@ -48,10 +53,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #define STR_PASS						_TEXT("passed")
 #define STR_OK							_TEXT("OK")
 
-#define STR_VERSION_OGG			_TEXT("\r\nlibogg: v1.3.2")
-#define STR_VERSION_VORBIS	_TEXT("\r\nlibvorbis: v1.3.4")
-#define STR_VERSION_FLAC		_TEXT("\r\nlibFLAC: v1.3.1")
-#define STR_VERSION_WAVPACK	_TEXT("\r\nlibWavPack: v4.70")
+#define STR_VERSION_OGG			_TEXT("\r\nlibogg: v1.3.6")	// libogg has no version query
 
 #define PADDING							12
 #define BUTTON_WIDTH				80
@@ -61,7 +63,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #define MSG_TEXT						WM_APP+42
 #define MSG_FINISHED				WM_APP+43
 #define MSG_PERCENT					WM_APP+44
-#define MSG_CMDLINE					WM_APP+45
 #define ID_ABOUT						1974
 #define TIMER								20
 #define SHELL_MUSIC					237
@@ -77,11 +78,15 @@ void ScanFolder(const wchar_t* folder);
 void AddFile(const wchar_t* filename);
 bool GetNext(wstring& filename);
 void SetText(wchar_t* filename, wchar_t* error);
+wstring MakeLongPath(const wchar_t* filename);
+wstring DisplayPath(const wchar_t* path);
+void AddArguments(int argc, LPWSTR* argv);
+void ForwardArguments(HWND hwnd, int argc, LPWSTR* argv);
+wstring Widen(const char* str);
 void SetPending();
 void StartTimer();
 void StopTimer();
 void UpdatePercent();
-wchar_t* GetCmdLine();
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 DWORD WINAPI ThreadProc(LPVOID param);
@@ -94,7 +99,7 @@ CDecoders* g_decoders;
 int g_cpus;
 int g_filecount;
 int g_filetotal;
-DWORD g_timer;
+ULONGLONG g_timer;
 float g_elapsed;
 HANDLE g_hTerminate;
 HANDLE g_hPending;
@@ -111,10 +116,20 @@ list<wstring> g_list;
 list<wstring> g_passes;
 map<wstring, wstring> g_errors;
 WNDPROC g_editproc;
+HFONT g_font;
+int g_dpi=96;
+
+#define SCALE(x)	MulDiv((x), g_dpi, 96)
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
 	g_hInst = hInstance;
+	SetProcessDPIAware();
+	HDC dc = GetDC(0);
+	g_dpi = GetDeviceCaps(dc, LOGPIXELSY);
+	ReleaseDC(0, dc);
+	int argc = 0;
+	LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
 	WNDCLASSEX wc;
 	ZeroMemory(&wc, sizeof(WNDCLASSEX));
 	wc.cbSize = sizeof(WNDCLASSEX);
@@ -122,17 +137,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	wc.hInstance = hInstance;
 	wc.lpfnWndProc = WndProc;
 	wc.lpszClassName = WINDOWTITLE;
-	wc.hbrBackground = (HBRUSH)COLOR_BTNSHADOW;
+	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
 	wc.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_AUDIOTESTER));
 	wc.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SMALL));
-	if (!RegisterClassEx(&wc))
-		return 0;
 	HWND h = FindWindow(WINDOWTITLE, NULL);
 	if (h)
 	{
-		// Only allow one instance
+		// Only allow one instance, so pass any files on to the one that's already running
+		ForwardArguments(h, argc, argv);
+		if (argv)
+			LocalFree(argv);
 		return 0;
 	}
+	if (!RegisterClassEx(&wc))
+		return 0;
 	InitCommonControls();
 	g_hWnd = CreateWindowEx(WS_EX_ACCEPTFILES, WINDOWTITLE, WINDOWTITLE, WS_VISIBLE | WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, hInstance, 0);
 	if (g_hWnd)
@@ -141,12 +159,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		InsertMenu(menu, 0, MF_BYPOSITION | MF_SEPARATOR, 0, 0);
 		InsertMenu(menu, 0, MF_BYPOSITION | MF_STRING, ID_ABOUT, STR_ABOUTMENU);
 		ShowWindow(g_hWnd, nCmdShow);
-		wchar_t* cmdline = GetCmdLine();
-		if (cmdline)
-		{
-			SendMessage(g_hWnd, MSG_CMDLINE, (WPARAM)cmdline, 0);
-			delete[] cmdline;
-		}
+		AddArguments(argc, argv);
+		if (argv)
+			LocalFree(argv);
 	}
 	else
 		return 0;
@@ -168,10 +183,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 void Startup(HWND hwnd)
 {
 	g_decoders = new CDecoders;
-	g_hEdit = CreateWindow(_TEXT("EDIT"), 0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_READONLY, PADDING, PADDING, 0, 0, hwnd, 0, g_hInst, 0);
+	g_hEdit = CreateWindow(_TEXT("EDIT"), 0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_READONLY, SCALE(PADDING), SCALE(PADDING), 0, 0, hwnd, 0, g_hInst, 0);
 	g_editproc = (WNDPROC)SetWindowLongPtr(g_hEdit, GWLP_WNDPROC, (LONG_PTR)EditProc);
-	g_hButton = CreateWindow(_TEXT("BUTTON"), STR_STOP, WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_CENTER | BS_VCENTER, 0, 0, BUTTON_WIDTH, BUTTON_HEIGHT, hwnd, 0, g_hInst, 0);
-	HFONT h = (HFONT)GetStockObject(ANSI_VAR_FONT);
+	SendMessage(g_hEdit, EM_SETLIMITTEXT, 0, 0);
+	g_hButton = CreateWindow(_TEXT("BUTTON"), STR_STOP, WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_CENTER | BS_VCENTER, 0, 0, SCALE(BUTTON_WIDTH), SCALE(BUTTON_HEIGHT), hwnd, 0, g_hInst, 0);
+	NONCLIENTMETRICS ncm;
+	ZeroMemory(&ncm, sizeof(ncm));
+	ncm.cbSize = sizeof(ncm);
+	if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+		g_font = CreateFontIndirect(&ncm.lfMessageFont);
+	HFONT h = g_font ? g_font : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 	SendMessage(g_hButton, WM_SETFONT, (WPARAM)h, 1);
 	SendMessage(g_hEdit, WM_SETFONT, (WPARAM)h, 1);
 	SendMessage(g_hEdit, WM_SETTEXT, 0, (LPARAM)STR_START );
@@ -184,6 +205,8 @@ void Cleanup()
 	KillTimer(g_hWnd, TIMER);
 	StopThreads();
 	delete g_decoders;
+	if (g_font)
+		DeleteObject(g_font);
 }
 
 void ResizeControls(HWND hwnd)
@@ -192,11 +215,14 @@ void ResizeControls(HWND hwnd)
 	GetClientRect(hwnd, &rect);
 	int width = rect.right - rect.left;
 	int height = rect.bottom - rect.top;
-	SetWindowPos(g_hButton, 0, width - PADDING - BUTTON_WIDTH, height - PADDING - BUTTON_HEIGHT, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-	SetWindowPos(g_hEdit, 0, 0, 0, width - PADDING * 2, height - PADDING * 3 - BUTTON_HEIGHT, SWP_NOMOVE | SWP_NOZORDER);
-	g_width = (width - PADDING*(2 + g_cpus) - BUTTON_WIDTH) / g_cpus;
+	int padding = SCALE(PADDING);
+	int buttonwidth = SCALE(BUTTON_WIDTH);
+	int buttonheight = SCALE(BUTTON_HEIGHT);
+	SetWindowPos(g_hButton, 0, width - padding - buttonwidth, height - padding - buttonheight, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+	SetWindowPos(g_hEdit, 0, 0, 0, width - padding * 2, height - padding * 3 - buttonheight, SWP_NOMOVE | SWP_NOZORDER);
+	g_width = (width - padding*(2 + g_cpus) - buttonwidth) / g_cpus;
 	for (int i = 0; i<g_cpus; i++)
-		SetWindowPos(g_hProgress[i], 0, PADDING*(i + 1) + (i*g_width), height - PADDING - BUTTON_HEIGHT, g_width, BUTTON_HEIGHT, SWP_NOZORDER);
+		SetWindowPos(g_hProgress[i], 0, padding*(i + 1) + (i*g_width), height - padding - buttonheight, g_width, buttonheight, SWP_NOZORDER);
 }
 
 void StartThreads(HWND hwnd)
@@ -213,10 +239,8 @@ void StartThreads(HWND hwnd)
 	{
 		g_hProgress[i] = CreateWindow(PROGRESS_CLASS, 0, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, hwnd, 0, g_hInst, 0);
 		g_hFinished[i] = CreateEvent(0, 1, 1, 0);
-		g_hThread[i] = CreateThread(0, 0, ThreadProc, (LPVOID)i, 0, 0);
+		g_hThread[i] = CreateThread(0, 0, ThreadProc, (LPVOID)(INT_PTR)i, 0, 0);
 		SetThreadPriority(g_hThread[i],THREAD_PRIORITY_BELOW_NORMAL);
-		if (g_cpus>1)
-			SetThreadAffinityMask(g_hThread[i], 1 << i);
 	}
 }
 
@@ -242,10 +266,12 @@ void OnDrop(HDROP drop)
 
 void CheckFile(const wchar_t* filename)
 {
-	wstring path(_TEXT("\\\\?\\"));
-	path += filename;
+	wstring path = MakeLongPath(filename);
+	DWORD attributes = GetFileAttributes(path.c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES)
+		return;
 	HCURSOR old = SetCursor(LoadCursor(0, IDC_WAIT));
-	if (GetFileAttributes(path.c_str())&FILE_ATTRIBUTE_DIRECTORY)
+	if (attributes&FILE_ATTRIBUTE_DIRECTORY)
 		ScanFolder(path.c_str());
 	else
 	{
@@ -262,16 +288,17 @@ void ScanFolder(const wchar_t* folder)
 	if (*(folder + wcslen(folder) - 1) != '\\')
 		path += '\\';
 	wstring str = path + _TEXT("*.*");
-	HANDLE h = FindFirstFile(str.c_str(), &data);
+	HANDLE h = FindFirstFileEx(str.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, 0, FIND_FIRST_EX_LARGE_FETCH);
 	if (h != INVALID_HANDLE_VALUE)
 	{
 		BOOL b = 1;
 		while (b)
 		{
 			str = path + data.cFileName;
-			if (GetFileAttributes(str.c_str())&FILE_ATTRIBUTE_DIRECTORY)
+			if (data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
 			{
-				if (data.cFileName[0] != '.')
+				// Skip . and .., and junctions/symlinks, which can loop back on themselves
+				if (wcscmp(data.cFileName, _TEXT(".")) && wcscmp(data.cFileName, _TEXT("..")) && !(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
 					ScanFolder(str.c_str());
 			}
 			else
@@ -298,15 +325,17 @@ bool GetNext(wstring& filename)
 	bool success = 1;
 	EnterCriticalSection(&g_critical);
 	if (g_list.empty())
+	{
+		// Reset while still holding the lock, so a file added after this check also sets the event again
 		success = 0;
+		ResetEvent(g_hPending);
+	}
 	else
 	{
 		filename = g_list.front();
 		g_list.pop_front();
 	}
 	LeaveCriticalSection(&g_critical);
-	if (!success)
-		ResetEvent(g_hPending);
 	return success;
 }
 
@@ -316,17 +345,17 @@ void SetText(wchar_t* filename, wchar_t* error)
 	{
 		swprintf_s(g_buf, MAXTEXT, _TEXT("[%d/%d]  "), ++g_filecount, g_filetotal);
 		g_text = g_buf;
-		g_text += filename + 4;
+		g_text += DisplayPath(filename);
 		if (error)
-			g_errors[filename + 4] = error;
+			g_errors[DisplayPath(filename)] = error;
 		else
-			g_passes.push_back(filename + 4);
+			g_passes.push_back(DisplayPath(filename));
 	}
 	else
 	{
-		swprintf(g_buf, MAXTEXT, STR_RESULT, g_filecount, (g_filecount == 1) ? (STR_FILE) : (STR_FILES), g_filecount ? g_elapsed : 0);
+		swprintf_s(g_buf, MAXTEXT, STR_RESULT, g_filecount, (g_filecount == 1) ? (STR_FILE) : (STR_FILES), g_filecount ? g_elapsed : 0);
 		g_text = g_buf;
-		swprintf(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%d %s %s"), g_errors.size(), (g_errors.size() == 1) ? (STR_FILE) : (STR_FILES), STR_ERROR);
+		swprintf_s(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%zu %s %s"), g_errors.size(), (g_errors.size() == 1) ? (STR_FILE) : (STR_FILES), STR_ERROR);
 		g_text += g_buf;
 		for (map<wstring, wstring>::const_iterator i = g_errors.begin(); i != g_errors.end(); i++)
 		{
@@ -339,7 +368,7 @@ void SetText(wchar_t* filename, wchar_t* error)
 				g_text += ')';
 			}
 		}
-		swprintf(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%d %s %s"), g_passes.size(), (g_passes.size() == 1) ? (STR_FILE) : (STR_FILES), STR_PASS);
+		swprintf_s(g_buf, MAXTEXT, _TEXT("\r\n---\r\n%zu %s %s"), g_passes.size(), (g_passes.size() == 1) ? (STR_FILE) : (STR_FILES), STR_PASS);
 		g_text += g_buf;
 		g_passes.sort();
 		for (list<wstring>::const_iterator i = g_passes.begin(); i != g_passes.end(); i++)
@@ -367,39 +396,77 @@ void SetPending()
 
 void StartTimer()
 {
-	g_timer = GetTickCount();
+	g_timer = GetTickCount64();
 }
 
 void StopTimer()
 {
-	DWORD i = GetTickCount();
-	g_elapsed = (i<g_timer) ? (float)(0x100000000 - g_timer + i) : (float)(i - g_timer);
-	g_elapsed /= 1000;
+	g_elapsed = (float)(GetTickCount64() - g_timer) / 1000;
 }
 
 void UpdatePercent()
 {
 	wchar_t buf[32];
-	swprintf(buf, 32, _TEXT("%s - %d%%"), WINDOWTITLE, ((g_filetotal) ? (g_filecount * 100 / g_filetotal) : 0));
+	swprintf_s(buf, 32, _TEXT("%s - %d%%"), WINDOWTITLE, ((g_filetotal) ? (g_filecount * 100 / g_filetotal) : 0));
 	SetWindowText(g_hWnd, buf);
 }
 
-wchar_t* GetCmdLine()
+wstring MakeLongPath(const wchar_t* filename)
 {
-	wchar_t* buf = 0;
-	int argcount;
-	LPWSTR* arglist = CommandLineToArgvW(GetCommandLine(), &argcount);
-	if (arglist)
+	// Full path with the \\?\ prefix, so paths longer than MAX_PATH work
+	if (!wcsncmp(filename, _TEXT("\\\\?\\"), 4))
+		return filename;
+	DWORD size = GetFullPathName(filename, 0, 0, 0);
+	if (!size)
+		return filename;
+	wstring full(size, 0);
+	size = GetFullPathName(filename, size, &full[0], 0);
+	full.resize(size);
+	if (!wcsncmp(full.c_str(), _TEXT("\\\\"), 2))
+		return _TEXT("\\\\?\\UNC\\") + full.substr(2);	// \\server\share becomes \\?\UNC\server\share
+	return _TEXT("\\\\?\\") + full;
+}
+
+wstring DisplayPath(const wchar_t* path)
+{
+	// Strip the prefix added by MakeLongPath (UNC paths get their leading \\ back)
+	if (!wcsncmp(path, _TEXT("\\\\?\\UNC\\"), 8))
+		return _TEXT("\\\\") + wstring(path + 8);
+	if (!wcsncmp(path, _TEXT("\\\\?\\"), 4))
+		return path + 4;
+	return path;
+}
+
+void AddArguments(int argc, LPWSTR* argv)
+{
+	if (argv && argc > 1)
 	{
-		if (argcount>1)
-		{
-			const size_t bufSize = wcslen(arglist[1]) + 1;
-			buf = new wchar_t[bufSize];
-			wcscpy_s(buf, bufSize, arglist[1]);
-		}
-		LocalFree(arglist);
+		for (int i = 1; i < argc; i++)
+			CheckFile(argv[i]);
+		SetPending();
 	}
-	return buf;
+}
+
+void ForwardArguments(HWND hwnd, int argc, LPWSTR* argv)
+{
+	// Send full paths, because the running instance has a different current folder
+	for (int i = 1; argv && i < argc; i++)
+	{
+		wstring path = MakeLongPath(argv[i]);
+		COPYDATASTRUCT cds;
+		cds.dwData = ID_ABOUT;
+		cds.cbData = (DWORD)((path.size() + 1) * sizeof(wchar_t));
+		cds.lpData = (PVOID)path.c_str();
+		SendMessage(hwnd, WM_COPYDATA, 0, (LPARAM)&cds);
+	}
+}
+
+wstring Widen(const char* str)
+{
+	wstring result;
+	while (str && *str)
+		result += (wchar_t)(unsigned char)*str++;
+	return result;
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -424,7 +491,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		OnDrop((HDROP)wParam);
 		return 0;
 	case WM_COMMAND:
-		if (HIWORD(wParam) == BN_CLICKED)
+		if ((HIWORD(wParam) == BN_CLICKED) && ((HWND)lParam == g_hButton))
 		{
 			EnterCriticalSection(&g_critical);
 			g_list.clear();
@@ -438,20 +505,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		{
 			wstring message(STR_ABOUT);
 			message+=STR_VERSION_OGG;
-			message+=STR_VERSION_VORBIS;
-			message+=STR_VERSION_FLAC;
-			message+=STR_VERSION_WAVPACK;
+			message+=_TEXT("\r\nlibvorbis: ") + Widen(vorbis_version_string());
+			message+=_TEXT("\r\nlibFLAC: v") + Widen(FLAC__VERSION_STRING);
+			message+=_TEXT("\r\nlibWavPack: v") + Widen(WavpackGetLibraryVersionString());
 			MessageBox(hwnd, message.c_str(), WINDOWTITLE, MB_ICONINFORMATION | MB_OK);
 			return 0;
 		}
 		break;
 	case WM_COPYDATA:
-		if (((PCOPYDATASTRUCT)lParam)->dwData == ID_ABOUT)
+	{
+		PCOPYDATASTRUCT cds = (PCOPYDATASTRUCT)lParam;
+		if ((cds->dwData == ID_ABOUT) && cds->lpData && (cds->cbData >= sizeof(wchar_t)))
 		{
-			CheckFile((wchar_t*)(((PCOPYDATASTRUCT)lParam)->lpData));
+			// Don't trust the sender to have null terminated the string
+			wstring path((const wchar_t*)cds->lpData, cds->cbData / sizeof(wchar_t));
+			path.resize(wcslen(path.c_str()));
+			CheckFile(path.c_str());
 			SetPending();
 		}
 		return 1;
+	}
 	case WM_TIMER:
 		for (g_cpu = 0; g_cpu<g_cpus; g_cpu++)
 		{
@@ -464,10 +537,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		return 0;
 	case MSG_PERCENT:
 		UpdatePercent();
-		return 0;
-	case MSG_CMDLINE:
-		CheckFile((wchar_t*)wParam);
-		SetPending();
 		return 0;
 	case MSG_FINISHED:
 		SetEvent(g_hFinished[wParam]);
@@ -510,7 +579,7 @@ LRESULT CALLBACK EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 DWORD WINAPI ThreadProc(LPVOID param)
 {
-	int n = (int)param;
+	int n = (int)(INT_PTR)param;
 	wstring filename;
 	CDecoder* decoder;
 	__int64 total;
@@ -531,9 +600,8 @@ DWORD WINAPI ThreadProc(LPVOID param)
 			const size_t bufSize = filename.size() + 1;
 			file = new wchar_t[bufSize];
 			wcscpy_s(file, bufSize, filename.c_str());
-			EnterCriticalSection(&g_critical);
+			// No lock needed: the decoder list is read-only, and CStream serialises whole-file loads itself
 			decoder = g_decoders->OpenDecoder(filename.c_str());
-			LeaveCriticalSection(&g_critical);
 			if (decoder)
 			{
 				samplecount = decoder->GetSampleCount();
@@ -564,7 +632,7 @@ DWORD WINAPI ThreadProc(LPVOID param)
 				error = new wchar_t[bufSize];
 				wcscpy_s(error, bufSize, STR_FILEERROR);
 			}
-			PostMessage(g_hWnd, MSG_TEXT, (WPARAM)file, (WPARAM)error);
+			PostMessage(g_hWnd, MSG_TEXT, (WPARAM)file, (LPARAM)error);
 			PostMessage(g_hWnd, MSG_PERCENT, 0, 0);
 		}
 		g_progress[n] = 0;

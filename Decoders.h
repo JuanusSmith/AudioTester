@@ -21,7 +21,6 @@ public:
 #include <list>
 #include <map>
 #include <string>
-using namespace std;
 
 class CDecoders
 {
@@ -31,8 +30,8 @@ public:
 	bool IsSupportedType(const wchar_t* filename);
 	CDecoder* OpenDecoder(const wchar_t* filename);
 private:
-	list<CDecoder*> m_list;
-	map<wstring,CDecoder*> m_map;
+	std::list<CDecoder*> m_list;
+	std::map<std::wstring,CDecoder*> m_map;
 	void AddDecoder(CDecoder* decoder);
 	CDecoder* FindDecoder(const wchar_t* filename);
 };

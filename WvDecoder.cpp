@@ -1,18 +1,20 @@
 #include "WvDecoder.h"
 
+using namespace std;
+
 int can_seek(void *id)
 {
 	return 1;
 }
 
-uint32_t get_length(void *id)
+int64_t get_length(void *id)
 {
-	return (uint32_t)((CStream*)id)->Length();
+	return ((CStream*)id)->Length();
 }
 
-uint32_t get_pos(void *id)
+int64_t get_pos(void *id)
 {
-	return (uint32_t)((CStream*)id)->Tell();
+	return ((CStream*)id)->Tell();
 }
 
 // Only used once in the wavpack source, and this should be sufficient
@@ -29,12 +31,12 @@ int32_t read_bytes(void *id, void *data, int32_t bcount)
 	return ((CStream*)id)->Read(data,bcount);
 }
 
-int set_pos_abs(void *id, uint32_t pos)
+int set_pos_abs(void *id, int64_t pos)
 {
 	return ((CStream*)id)->Seek(pos,SEEK_SET);
 }
 
-int set_pos_rel(void *id, int32_t delta, int mode)
+int set_pos_rel(void *id, int64_t delta, int mode)
 {
 	return ((CStream*)id)->Seek(delta,mode);
 }
@@ -42,6 +44,7 @@ int set_pos_rel(void *id, int32_t delta, int mode)
 CWvDecoder::CWvDecoder()
 {
 	m_opened=0;
+	m_error[0]=0;
 }
 
 CWvDecoder::~CWvDecoder()
@@ -52,12 +55,15 @@ CWvDecoder::~CWvDecoder()
 CWvDecoder::CWvDecoder(const wchar_t *filename)
 {
 	m_opened=0;
-	m_stream.Open(filename,m_usemem);
+	m_error[0]=0;
+	if(!m_stream.Open(filename,m_usemem))
+		return;
 	wstring str=filename;
 	str+='c';
 	CStream* wvc=0;
 	if(m_stream2.Open(str.c_str(),m_usemem))
 		wvc=&m_stream2;
+	memset(&m_reader,0,sizeof(m_reader));
 	m_reader.can_seek=can_seek;
 	m_reader.get_length=get_length;
 	m_reader.get_pos=get_pos;
@@ -66,10 +72,10 @@ CWvDecoder::CWvDecoder(const wchar_t *filename)
 	m_reader.set_pos_abs=set_pos_abs;
 	m_reader.set_pos_rel=set_pos_rel;
 	char error[80];
-	m_wpc=WavpackOpenFileInputEx(&m_reader,&m_stream,wvc,error,OPEN_WVC,0);
-	if(m_wpc)
+	m_wpc=WavpackOpenFileInputEx64(&m_reader,&m_stream,wvc,error,OPEN_WVC,0);
+	if(m_wpc&&WavpackGetNumChannels(m_wpc)>0)
 	{
-		m_samples=WavpackGetNumSamples(m_wpc);
+		m_samples=WavpackGetNumSamples64(m_wpc);
 		m_bps=WavpackGetBytesPerSample(m_wpc);
 		m_channels=WavpackGetNumChannels(m_wpc);
 		m_chunksize=WVSIZE/m_channels;
@@ -84,6 +90,8 @@ CWvDecoder::CWvDecoder(const wchar_t *filename)
 		m_count=0;
 		m_opened=1;
 	}
+	else if(m_wpc)
+		WavpackCloseFile(m_wpc);
 }
 
 void CWvDecoder::CloseFiles()
@@ -135,12 +143,12 @@ long CWvDecoder::Read()
 		int errors=WavpackGetNumErrors(m_wpc);
 		if(errors)
 		{
-			swprintf(m_error,MAXERROR,L"%d BAD BLOC%s",errors,errors>1?L"KS":L"K");
+			swprintf_s(m_error,MAXERROR,L"%d BAD BLOC%s",errors,errors>1?L"KS":L"K");
 			i=-1;
 		}
 		else
 		{
-			if(m_count==m_samples)
+			if(m_samples==-1||m_count==m_samples)	// -1 means the total is unknown
 			{
 				if(m_calcmd5)
 				{
@@ -159,7 +167,7 @@ long CWvDecoder::Read()
 			}
 			else
 			{
-				swprintf(m_error,MAXERROR,L"%d %s",m_count<m_samples?(int)(m_samples-m_count):(int)(m_count-m_samples),m_count<m_samples?L"MISSING SAMPLES":L"EXTRA SAMPLES");
+				swprintf_s(m_error,MAXERROR,L"%lld %s",m_count<m_samples?m_samples-m_count:m_count-m_samples,m_count<m_samples?L"MISSING SAMPLES":L"EXTRA SAMPLES");
 				i=-1;
 			}
 		}

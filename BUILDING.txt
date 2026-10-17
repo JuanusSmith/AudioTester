@@ -1,0 +1,29 @@
+Building AudioTester 1.7.1 (unofficial build)
+=============================================
+
+Needs Visual Studio 2026 (or its Build Tools) with the "Desktop development with C++"
+workload. Visual Studio's bundled vcpkg supplies the codec libraries.
+
+1. Build the codec libraries (first time only, needs internet access to GitHub):
+
+   set VCPKG="C:\Program Files\Microsoft Visual Studio\18\Community\VC\vcpkg\vcpkg.exe"
+   %VCPKG% install --triplet x64-windows-static --x-install-root=vcpkg_installed\x64
+   %VCPKG% install --triplet x86-windows-static --x-install-root=vcpkg_installed\x86
+
+   Versions are pinned by vcpkg.json and vcpkg-configuration.json.
+
+2. Build the app (or open AudioTester.sln in Visual Studio):
+
+   msbuild AudioTester.vcxproj /p:Configuration=Release /p:Platform=x64
+   msbuild AudioTester.vcxproj /p:Configuration=Release /p:Platform=Win32
+
+   Output: x64\Release\AudioTester.exe and Release\AudioTester.exe (no DLLs needed).
+
+Testing
+-------
+   tests\build_tests.cmd                              builds the test tools
+   tests\build\make_test_files.exe tests\data         writes good files for each format
+   python tests\make_damaged_files.py tests\data      adds damaged copies and expected.txt
+   tests\build\decoder_test.exe 1 tests\data\*.*      checks every file with the decoders
+   powershell -File tests\gui_test.ps1 -Exe x64\Release\AudioTester.exe
+                                                      runs the real window end to end
