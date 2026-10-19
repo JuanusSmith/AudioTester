@@ -1,4 +1,4 @@
-Building AudioTester 1.7.1 (unofficial build)
+Building AudioTester 1.7.2 (unofficial build)
 =============================================
 
 Needs Visual Studio 2026 (or its Build Tools) with the "Desktop development with C++"

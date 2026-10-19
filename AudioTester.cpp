@@ -50,7 +50,7 @@ struct PathLess
 };
 
 #define WINDOWTITLE					_TEXT("AudioTester")
-#define STR_ABOUT						_TEXT("AudioTester version 1.7.1 (unofficial build)\r\nCopyright © 2015 James Chapman \r\nhttp://www.vuplayer.com\r\nUpdated 2026 with bug fixes and current codec libraries\r\n")
+#define STR_ABOUT						_TEXT("AudioTester version 1.7.2 (unofficial build)\r\nCopyright © 2015 James Chapman \r\nhttp://www.vuplayer.com\r\nUpdated 2026 with bug fixes and current codec libraries\r\n")
 #define STR_ABOUTMENU				_TEXT("About AudioTester")
 #define STR_START						_TEXT("Drop files/folders here")
 #define STR_FILEERROR				_TEXT("UNABLE TO OPEN DECODER")

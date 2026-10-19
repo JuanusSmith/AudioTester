@@ -18,6 +18,16 @@ AudioTester was written by **James Chapman** ([vuplayer.com](http://www.vuplayer
 - Select the results with **Ctrl+A** and copy them with **Ctrl+C**.
 - The system menu (click the window icon) has **About AudioTester**, which shows the codec library versions.
 
+## What changed in 1.7.2 (2026)
+
+- **All processors used:** one worker thread per logical processor, across all processor groups, instead of at most 16. With more than 16 threads, a single shared progress bar shows overall progress instead of one bar per thread.
+- **Per-monitor DPI:** the window rescales its font and layout when moved to a monitor with a different display scale (Windows 10 1703 or later; older Windows falls back to system DPI).
+- **Free-format MP3:** files with a free-format bitrate (bitrate index 0) are now checked like any other MP3 instead of being reported as `UNRECOGNISED FORMAT`. The frame length is found from the distance to the next frame header, and every later frame is checked against it. An invalid bitrate index (15) is now rejected; before, it produced a 1-byte frame.
+- **Closing mid-scan:** result text that worker threads had already sent, but the window hadn't shown yet, was leaked. It is now freed.
+- **Version info:** the exe's Properties > Details tab now shows version 1.7.2 and marks it as an unofficial build. In 1.7.1 it still said 1.7.
+- **Build:** no compiler warnings at /W4. `/analyze` reports only uninitialized-member warnings (C26495) on decoder members that are used only after a file opens successfully.
+- **Tests:** a free-format MP3 and three damaged copies of it (29 test files in total), and the GUI test also checks per-monitor DPI awareness.
+
 ## What changed in 1.7.1 (2026)
 
 ### Bug fixes
@@ -61,16 +71,16 @@ AudioTester was written by **James Chapman** ([vuplayer.com](http://www.vuplayer
 - The project builds with Visual Studio 2026 (v145 toolset) at warning level 4, for both x64 and Win32.
 - The About box reads library versions from the libraries at run time instead of hardcoding them.
 
-### Tests
+## Tests
 
-The new `tests/` folder holds:
+The `tests/` folder (added in 1.7.1) holds:
 
 - **`make_test_files.cpp`**: writes known-good files for every format (FLAC with and without a stored length, Ogg Vorbis, WavPack with MD5, and MP3 with and without CRCs or an ID3v2 tag, and in free format).
 - **`make_damaged_files.py`**: makes damaged copies (truncated, flipped bytes, a broken frame header, damaged CRC-protected data, a malformed ID3v2 tag, junk and empty files) and an `expected.txt` listing the right result for each file.
 - **`decoder_test.cpp`**: runs each file through the same decoder loop as the app, in both in-memory and buffered read modes.
 - **`gui_test.ps1`**: starts the real app window, reads its results and checks them against `expected.txt`. It also checks that the window is per-monitor DPI aware and that a second launch with a relative path forwards its file to the open window. Use `-Data` to point it at a network path.
 
-All 29 test files (25 in 1.7.1, plus a free-format MP3 and three damaged copies of it) give the expected result on both the x64 and Win32 builds. On the same files the original 1.7 exe wrongly fails the valid FLAC with an unknown length, ignores the second launch, and finds no files at all on a network path.
+All 29 test files give the expected result on both the x64 and Win32 builds. On the same files the original 1.7 exe wrongly fails the valid FLAC with an unknown length, ignores the second launch, and finds no files at all on a network path.
 
 ## Building
 
@@ -91,15 +101,9 @@ The output is `x64\Release\AudioTester.exe` and `Release\AudioTester.exe`. This 
 - Ogg Opus, M4A/AAC/ALAC, WAV/AIFF and APE are not supported.
 - Results can only be copied from the window, not saved to a file.
 
-## Changes since 1.7.1 (not yet released)
-
-- **All processors used:** one worker thread per logical processor across all processor groups, instead of at most 16. With more than 16 threads, one shared progress bar shows overall progress instead of one bar per thread.
-- **Per-monitor DPI:** the window rescales its font and layout when moved to a monitor with a different scale (Windows 10 1703 or later; older Windows falls back to system DPI).
-- **Free-format MP3:** files with a free-format bitrate (bitrate index 0) are checked like other MP3s. The frame length is found from the distance to the next frame header, and every later frame is checked against it.
-- **Closing mid-scan:** result text that worker threads had already sent but the window hadn't shown yet was leaked. It is now freed.
-- The project builds with no warnings at /W4, and `/analyze` reports nothing beyond uninitialized-member style warnings (C26495) on decoder members that are only used after a successful open.
-
 ## Version history
+
+**1.7.2** (unofficial, 18 October 2026): uses all processors, per-monitor DPI, free-format MP3 support, a leak fix, corrected version info and a warning-free build, as described above.
 
 **1.7.1** (unofficial, 17 October 2026): bug fixes, updated codec libraries, VS2026 build and tests, as described above.
 
