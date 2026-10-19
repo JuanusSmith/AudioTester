@@ -16,6 +16,9 @@ const long MP3_CRCBYTES[2][2]={{32,17},{17,9}};	// http://www.codeproject.com/au
 #define LAYER3		1
 
 #define MAXRESYNC	65536
+#define MINFREE		24		// shortest free format frame looked for (header + side info)
+#define MAXFREE		8192	// longest; 640kbps Layer III at 32kHz is 2881 bytes
+#define FREEMASK	0xfffefc00	// same version, layer, samplerate, and bitrate index 0
 
 #define APE_TAG_FOOTER_BYTES					32
 #define APE_TAG_FOOTER_ID						"APETAGEX"
@@ -66,6 +69,7 @@ private:
 	int m_headerlength;
 	int m_footerlength;
 	int m_framelength;
+	int m_freelength;	// unpadded length of free format frames, once the first one is found
 	int m_resync;
 	int m_crcbytes;
 	unsigned short m_crc;
@@ -74,6 +78,7 @@ private:
 	int GetFooterLength();
 	int GetLyricsLength();
 	int GetFrameLength();
+	int GetFreeLength();
 	bool Resync();
 	bool CheckCRC();
 	unsigned short CRC16(int crc, unsigned char* buf, int length);

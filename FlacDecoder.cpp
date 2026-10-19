@@ -128,7 +128,7 @@ FLAC__StreamDecoderReadStatus CFlacDecoder::read_callback(FLAC__byte buf[],size_
 {
 	if(*size>0)
 	{
-		*size=m_stream.Read(buf,*size);
+		*size=m_stream.Read(buf,(unsigned long)*size);
 		if(*size>0)
 			return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;
 		else
@@ -166,7 +166,7 @@ bool CFlacDecoder::eof_callback(void)
 		return false;
 }
 
-FLAC__StreamDecoderWriteStatus CFlacDecoder::write_callback(const FLAC__Frame * frame,const FLAC__int32 *const buffer[])
+FLAC__StreamDecoderWriteStatus CFlacDecoder::write_callback(const FLAC__Frame * frame,const FLAC__int32 *const [])
 {
 	m_framesize=frame->header.blocksize;
 	m_count+=m_framesize;

@@ -2,7 +2,7 @@
 
 using namespace std;
 
-int can_seek(void *id)
+int can_seek(void *)
 {
 	return 1;
 }
@@ -185,7 +185,7 @@ void CWvDecoder::UpdateMD5(long count)
 	{
 	case 1:
 		while(i--)
-			*dst++=(*src++)+128;
+			*dst++=(unsigned char)((*src++)+128);
 		break;
 	case 2:
 	    while(i--)

@@ -238,6 +238,29 @@ static bool WriteMp3(const string& path, bool crc, int id3size)
 	return true;
 }
 
+// MPEG-1 Layer III, 44.1kHz, stereo, free format (bitrate index 0): every frame is FREELEN bytes,
+// plus one when padded. Every third frame is padded, as an encoder would to hold an odd bitrate.
+static const int FREELEN = 500;
+static bool WriteMp3Free(const string& path)
+{
+	FILE* f = fopen(path.c_str(), "wb");
+	if (!f)
+		return false;
+	for (int n = 0; n < 400; n++)
+	{
+		int pad = (n % 3 == 2);
+		unsigned char frame[FREELEN + 1];
+		memset(frame, 0, sizeof(frame));
+		frame[0] = 0xff;
+		frame[1] = 0xfb;
+		frame[2] = (unsigned char)(pad << 1);
+		frame[3] = 0x00;
+		fwrite(frame, 1, FREELEN + pad, f);
+	}
+	fclose(f);
+	return true;
+}
+
 int main(int argc, char** argv)
 {
 	if (argc < 2)
@@ -257,6 +280,7 @@ int main(int argc, char** argv)
 		{ "good.mp3", WriteMp3(dir + "good.mp3", false, 0) },
 		{ "good_crc.mp3", WriteMp3(dir + "good_crc.mp3", true, 0) },
 		{ "good_id3v2.mp3", WriteMp3(dir + "good_id3v2.mp3", false, 512) },
+		{ "good_free_format.mp3", WriteMp3Free(dir + "good_free_format.mp3") },
 	};
 	int failures = 0;
 	for (auto& r : results)

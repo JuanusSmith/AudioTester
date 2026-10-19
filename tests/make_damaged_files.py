@@ -34,6 +34,7 @@ expected = {
     'good.mp3': 'PASS',
     'good_crc.mp3': 'PASS',
     'good_id3v2.mp3': 'PASS',
+    'good_free_format.mp3': 'PASS',
 }
 
 for ext in ('flac', 'ogg', 'wv'):
@@ -53,6 +54,18 @@ write('crc_damaged.mp3', flip(crc, 200 * FRAME + 10, 1))
 expected['truncated.mp3'] = 'FAIL'
 expected['broken_header.mp3'] = 'FAIL'
 expected['crc_damaged.mp3'] = 'FAIL'
+
+# Free format MP3 (500-byte frames, every third one padded): cut mid-frame, break a header, and
+# shorten one frame so the frames after it are no longer where the first frame's length says
+FREE = 500
+free = read('good_free_format.mp3')
+frame200 = sum(FREE + (n % 3 == 2) for n in range(200))
+write('free_format_truncated.mp3', free[:frame200 + 100])
+write('free_format_broken_header.mp3', flip(free, frame200, 2))
+write('free_format_short_frame.mp3', free[:frame200 + 100] + free[frame200 + 107:])
+expected['free_format_truncated.mp3'] = 'FAIL'
+expected['free_format_broken_header.mp3'] = 'FAIL'
+expected['free_format_short_frame.mp3'] = 'FAIL'
 
 # An ID3v2 tag whose size bytes aren't sync-safe (a byte >= 0x80). The old signed-char code
 # misread the size; the fixed code reports a bad tag

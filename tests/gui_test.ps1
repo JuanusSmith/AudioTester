@@ -14,6 +14,8 @@ public static class W {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, StringBuilder l);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetAwarenessFromDpiAwarenessContext(IntPtr c);
     public static string GetText(IntPtr h) {
         int n = (int)SendMessage(h, 0x000E, IntPtr.Zero, IntPtr.Zero);   // WM_GETTEXTLENGTH
         var sb = new StringBuilder(n + 1);
@@ -45,6 +47,11 @@ if ($main -eq [IntPtr]::Zero) { throw 'AudioTester window did not appear.' }
 $edit = [W]::FindWindowEx($main, [IntPtr]::Zero, 'Edit', [NullString]::Value)
 
 $failures = 0
+# 2 is DPI_AWARENESS_PER_MONITOR_AWARE (Windows 10 1703 or later)
+$awareness = [W]::GetAwarenessFromDpiAwarenessContext([W]::GetWindowDpiAwarenessContext($main))
+if ($awareness -eq 2) { Write-Output 'ok   window is per-monitor DPI aware' }
+else { Write-Output "XX   window DPI awareness is $awareness, not per-monitor"; $failures++ }
+
 $text = Wait-Summary $edit 'scanned in [\d.]+ seconds[\s\S]*passed'
 if (-not $text) { Write-Output 'FAIL: no summary within 60 seconds'; $failures++ }
 else {

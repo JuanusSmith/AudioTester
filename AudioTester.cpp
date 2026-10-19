@@ -31,6 +31,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlwapi.h>
+#include <vector>
 #include "decoders.h"
 #include "stream.h"
 #include <FLAC/format.h>
@@ -66,7 +67,8 @@ struct PathLess
 #define PADDING							12
 #define BUTTON_WIDTH				80
 #define BUTTON_HEIGHT				24
-#define MAXCPU							16
+#define MAXBARS							16		// more threads than this share one progress bar
+#define AGGREGATE						1000	// range of the shared progress bar
 #define MAXTEXT							256
 #define MSG_TEXT						WM_APP+42
 #define MSG_FINISHED				WM_APP+43
@@ -78,8 +80,12 @@ struct PathLess
 void Startup(HWND hwnd);
 void Cleanup();
 void ResizeControls(HWND hwnd);
+void UpdateFont();
 void StartThreads(HWND hwnd);
 void StopThreads();
+bool AllFinished();
+void UpdateProgress();
+wchar_t* CopyString(const wchar_t* str);
 void OnDrop(HDROP drop);
 void CheckFile(const wchar_t* filename);
 void ScanFolder(const wchar_t* folder);
@@ -111,12 +117,14 @@ ULONGLONG g_timer;
 float g_elapsed;
 HANDLE g_hTerminate;
 HANDLE g_hPending;
-HANDLE g_hThread[MAXCPU];
-HANDLE g_hFinished[MAXCPU];
-HWND g_hProgress[MAXCPU];
-int g_progress[MAXCPU];
+vector<HANDLE> g_hThread;
+vector<HANDLE> g_hFinished;
+vector<int> g_progress;		// per thread, written by the thread
+vector<int> g_range;		// per thread, written by the thread
+int g_bars;					// one bar per thread, or one shared bar when there are more than MAXBARS threads
+vector<HWND> g_hProgress;
+vector<int> g_barrange;
 int g_width;
-int g_cpu;
 CRITICAL_SECTION g_critical;
 wstring g_text;
 wchar_t g_buf[MAXTEXT];
@@ -125,16 +133,26 @@ list<wstring> g_passes;
 map<wstring, wstring, PathLess> g_errors;
 WNDPROC g_editproc;
 HFONT g_font;
-int g_dpi=96;
+int g_dpi=96;			// of the monitor the window is on
+int g_sysdpi=96;		// that SystemParametersInfo scales for
+typedef BOOL (WINAPI *SETDPICONTEXT)(DPI_AWARENESS_CONTEXT);
+typedef UINT (WINAPI *GETDPIFORWINDOW)(HWND);
+GETDPIFORWINDOW g_getdpi;
 
 #define SCALE(x)	MulDiv((x), g_dpi, 96)
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int nCmdShow)
 {
 	g_hInst = hInstance;
-	SetProcessDPIAware();
+	// Per-monitor DPI where Windows supports it (10 1703+), looked up at run time so older Windows still starts
+	HMODULE user32 = GetModuleHandle(_TEXT("user32.dll"));
+	SETDPICONTEXT setdpicontext = user32 ? (SETDPICONTEXT)GetProcAddress(user32, "SetProcessDpiAwarenessContext") : 0;
+	if (!setdpicontext || !setdpicontext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+		SetProcessDPIAware();
+	else
+		g_getdpi = (GETDPIFORWINDOW)GetProcAddress(user32, "GetDpiForWindow");
 	HDC dc = GetDC(0);
-	g_dpi = GetDeviceCaps(dc, LOGPIXELSY);
+	g_dpi = g_sysdpi = GetDeviceCaps(dc, LOGPIXELSY);
 	ReleaseDC(0, dc);
 	int argc = 0;
 	LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
@@ -175,7 +193,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		return 0;
 	MSG msg;
 	BOOL bReturn;
-	while (bReturn = GetMessage(&msg, 0, 0, 0))
+	while ((bReturn = GetMessage(&msg, 0, 0, 0)) != 0)
 	{
 		if (bReturn == -1)
 			bReturn = 0;
@@ -191,18 +209,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 void Startup(HWND hwnd)
 {
 	g_decoders = new CDecoders;
-	g_hEdit = CreateWindow(_TEXT("EDIT"), 0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_READONLY, SCALE(PADDING), SCALE(PADDING), 0, 0, hwnd, 0, g_hInst, 0);
+	if (g_getdpi)
+		g_dpi = g_getdpi(hwnd);
+	g_hEdit = CreateWindow(_TEXT("EDIT"), 0, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_READONLY, 0, 0, 0, 0, hwnd, 0, g_hInst, 0);
 	g_editproc = (WNDPROC)SetWindowLongPtr(g_hEdit, GWLP_WNDPROC, (LONG_PTR)EditProc);
 	SendMessage(g_hEdit, EM_SETLIMITTEXT, 0, 0);
-	g_hButton = CreateWindow(_TEXT("BUTTON"), STR_STOP, WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_CENTER | BS_VCENTER, 0, 0, SCALE(BUTTON_WIDTH), SCALE(BUTTON_HEIGHT), hwnd, 0, g_hInst, 0);
-	NONCLIENTMETRICS ncm;
-	ZeroMemory(&ncm, sizeof(ncm));
-	ncm.cbSize = sizeof(ncm);
-	if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-		g_font = CreateFontIndirect(&ncm.lfMessageFont);
-	HFONT h = g_font ? g_font : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-	SendMessage(g_hButton, WM_SETFONT, (WPARAM)h, 1);
-	SendMessage(g_hEdit, WM_SETFONT, (WPARAM)h, 1);
+	g_hButton = CreateWindow(_TEXT("BUTTON"), STR_STOP, WS_CHILD | WS_VISIBLE | WS_DISABLED | BS_CENTER | BS_VCENTER, 0, 0, 0, 0, hwnd, 0, g_hInst, 0);
+	UpdateFont();
 	SendMessage(g_hEdit, WM_SETTEXT, 0, (LPARAM)STR_START );
 	StartThreads(hwnd);
 	SetTimer(hwnd, TIMER, TIMER, 0);
@@ -212,9 +225,36 @@ void Cleanup()
 {
 	KillTimer(g_hWnd, TIMER);
 	StopThreads();
+	// Free the strings of any results the threads posted that never got shown
+	MSG msg;
+	while (PeekMessage(&msg, g_hWnd, MSG_TEXT, MSG_TEXT, PM_REMOVE))
+	{
+		delete[] (wchar_t*)msg.wParam;
+		delete[] (wchar_t*)msg.lParam;
+	}
 	delete g_decoders;
 	if (g_font)
 		DeleteObject(g_font);
+}
+
+void UpdateFont()
+{
+	// The message font at the window's DPI (SystemParametersInfo gives it at the system DPI)
+	HFONT old = g_font;
+	g_font = 0;
+	NONCLIENTMETRICS ncm;
+	ZeroMemory(&ncm, sizeof(ncm));
+	ncm.cbSize = sizeof(ncm);
+	if (SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+	{
+		ncm.lfMessageFont.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, g_dpi, g_sysdpi);
+		g_font = CreateFontIndirect(&ncm.lfMessageFont);
+	}
+	HFONT h = g_font ? g_font : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+	SendMessage(g_hButton, WM_SETFONT, (WPARAM)h, 1);
+	SendMessage(g_hEdit, WM_SETFONT, (WPARAM)h, 1);
+	if (old)
+		DeleteObject(old);
 }
 
 void ResizeControls(HWND hwnd)
@@ -226,37 +266,150 @@ void ResizeControls(HWND hwnd)
 	int padding = SCALE(PADDING);
 	int buttonwidth = SCALE(BUTTON_WIDTH);
 	int buttonheight = SCALE(BUTTON_HEIGHT);
-	SetWindowPos(g_hButton, 0, width - padding - buttonwidth, height - padding - buttonheight, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-	SetWindowPos(g_hEdit, 0, 0, 0, width - padding * 2, height - padding * 3 - buttonheight, SWP_NOMOVE | SWP_NOZORDER);
-	g_width = (width - padding*(2 + g_cpus) - buttonwidth) / g_cpus;
-	for (int i = 0; i<g_cpus; i++)
+	// Sized as well as moved, because the scaled sizes change when the DPI does
+	SetWindowPos(g_hButton, 0, width - padding - buttonwidth, height - padding - buttonheight, buttonwidth, buttonheight, SWP_NOZORDER);
+	SetWindowPos(g_hEdit, 0, padding, padding, width - padding * 2, height - padding * 3 - buttonheight, SWP_NOZORDER);
+	g_width = (width - padding*(2 + g_bars) - buttonwidth) / g_bars;
+	for (int i = 0; i<g_bars; i++)
 		SetWindowPos(g_hProgress[i], 0, padding*(i + 1) + (i*g_width), height - padding - buttonheight, g_width, buttonheight, SWP_NOZORDER);
 }
 
 void StartThreads(HWND hwnd)
 {
-	SYSTEM_INFO info;
-	GetSystemInfo(&info);
-	g_cpus = (info.dwNumberOfProcessors>MAXCPU) ? MAXCPU : info.dwNumberOfProcessors;
+	// One thread per logical processor, across all processor groups
+	g_cpus = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+	if (g_cpus<1)
+		g_cpus = 1;
 	if (g_cpus>1)
 		CDecoder::m_usemem = 1;
+	g_bars = (g_cpus>MAXBARS) ? 1 : g_cpus;
 	g_hTerminate = CreateEvent(0, 1, 0, 0);
 	g_hPending = CreateEvent(0, 1, 0, 0);
 	InitializeCriticalSection(&g_critical);
+	g_hThread.resize(g_cpus);
+	g_hFinished.resize(g_cpus);
+	g_progress.assign(g_cpus, 0);
+	g_range.assign(g_cpus, 1);
+	g_hProgress.resize(g_bars);
+	g_barrange.assign(g_bars, 0);
+	for (int i = 0; i<g_bars; i++)
+		g_hProgress[i] = CreateWindow(PROGRESS_CLASS, 0, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, hwnd, 0, g_hInst, 0);
+	// Active processors of each group, so threads can be spread across groups
+	vector<KAFFINITY> masks;
+	DWORD length = 0;
+	GetLogicalProcessorInformationEx(RelationGroup, 0, &length);
+	vector<BYTE> buf(length);
+	PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf.data();
+	if (length && GetLogicalProcessorInformationEx(RelationGroup, info, &length))
+	{
+		for (WORD g = 0; g<info->Group.ActiveGroupCount; g++)
+			masks.push_back(info->Group.GroupInfo[g].ActiveProcessorMask);
+	}
+	size_t group = 0;
+	DWORD ingroup = 0;
 	for (int i = 0; i<g_cpus; i++)
 	{
-		g_hProgress[i] = CreateWindow(PROGRESS_CLASS, 0, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, hwnd, 0, g_hInst, 0);
 		g_hFinished[i] = CreateEvent(0, 1, 1, 0);
-		g_hThread[i] = CreateThread(0, 0, ThreadProc, (LPVOID)(INT_PTR)i, 0, 0);
+		g_hThread[i] = CreateThread(0, 0, ThreadProc, (LPVOID)(INT_PTR)i, CREATE_SUSPENDED, 0);
+		if (!g_hThread[i])
+		{
+			// Run with the threads we have
+			CloseHandle(g_hFinished[i]);
+			g_cpus = i;
+			g_hThread.resize(i);
+			g_hFinished.resize(i);
+			break;
+		}
+		if (masks.size()>1)
+		{
+			// Windows before 11 keeps a process in one processor group unless its threads are moved
+			while (ingroup >= GetActiveProcessorCount((WORD)group))
+			{
+				group = (group + 1) % masks.size();
+				ingroup = 0;
+			}
+			ingroup++;
+			GROUP_AFFINITY affinity;
+			ZeroMemory(&affinity, sizeof(affinity));
+			affinity.Group = (WORD)group;
+			affinity.Mask = masks[group];
+			SetThreadGroupAffinity(g_hThread[i], &affinity, 0);
+		}
 		SetThreadPriority(g_hThread[i],THREAD_PRIORITY_BELOW_NORMAL);
+		ResumeThread(g_hThread[i]);
 	}
 }
 
 void StopThreads()
 {
 	SetEvent(g_hTerminate);
-	WaitForMultipleObjects(g_cpus, g_hThread, 1, INFINITE);
+	// WaitForMultipleObjects takes at most MAXIMUM_WAIT_OBJECTS handles, so wait in batches
+	for (int i = 0; i<g_cpus; i += MAXIMUM_WAIT_OBJECTS)
+		WaitForMultipleObjects((g_cpus - i > MAXIMUM_WAIT_OBJECTS) ? MAXIMUM_WAIT_OBJECTS : g_cpus - i, &g_hThread[i], 1, INFINITE);
+	for (int i = 0; i<g_cpus; i++)
+	{
+		CloseHandle(g_hThread[i]);
+		CloseHandle(g_hFinished[i]);
+	}
 	DeleteCriticalSection(&g_critical);
+}
+
+bool AllFinished()
+{
+	for (int i = 0; i<g_cpus; i += MAXIMUM_WAIT_OBJECTS)
+	{
+		if (WaitForMultipleObjects((g_cpus - i > MAXIMUM_WAIT_OBJECTS) ? MAXIMUM_WAIT_OBJECTS : g_cpus - i, &g_hFinished[i], 1, 0) != WAIT_OBJECT_0)
+			return 0;
+	}
+	return 1;
+}
+
+void UpdateProgress()
+{
+	if (g_bars == g_cpus)
+	{
+		for (int i = 0; i<g_bars; i++)
+		{
+			int range = g_range[i];
+			if (g_barrange[i] != range)
+			{
+				g_barrange[i] = range;
+				SendMessage(g_hProgress[i], PBM_SETRANGE32, 0, range);
+			}
+			if (g_progress[i] != SendMessage(g_hProgress[i], PBM_GETPOS, 0, 0))
+				SendMessage(g_hProgress[i], PBM_SETPOS, g_progress[i], 0);
+		}
+	}
+	else
+	{
+		// One bar for all the threads: the files done, plus the part done of each file in progress
+		if (g_barrange[0] != AGGREGATE)
+		{
+			g_barrange[0] = AGGREGATE;
+			SendMessage(g_hProgress[0], PBM_SETRANGE32, 0, AGGREGATE);
+		}
+		__int64 done = (__int64)g_filecount * AGGREGATE;
+		for (int i = 0; i<g_cpus; i++)
+		{
+			int range = g_range[i];
+			int progress = g_progress[i];
+			if (range>0 && progress>0)
+				done += (progress >= range) ? AGGREGATE : (__int64)progress * AGGREGATE / range;
+		}
+		int pos = 0;
+		if (g_filetotal)
+			pos = (done >= (__int64)g_filetotal * AGGREGATE) ? AGGREGATE : (int)(done / g_filetotal);
+		if (pos != SendMessage(g_hProgress[0], PBM_GETPOS, 0, 0))
+			SendMessage(g_hProgress[0], PBM_SETPOS, pos, 0);
+	}
+}
+
+wchar_t* CopyString(const wchar_t* str)
+{
+	const size_t size = wcslen(str) + 1;
+	wchar_t* copy = new wchar_t[size];
+	wcscpy_s(copy, size, str);
+	return copy;
 }
 
 void OnDrop(HDROP drop)
@@ -395,7 +548,7 @@ void SetText(wchar_t* filename, wchar_t* error)
 
 void SetPending()
 {
-	if (WaitForMultipleObjects(g_cpus, g_hFinished, 1, 0) == WAIT_OBJECT_0)
+	if (AllFinished())
 		StartTimer();
 	SetEvent(g_hPending);
 	EnableWindow(g_hButton, 1);
@@ -534,12 +687,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		return 1;
 	}
 	case WM_TIMER:
-		for (g_cpu = 0; g_cpu<g_cpus; g_cpu++)
-		{
-			if (g_progress[g_cpu] != SendMessage(g_hProgress[g_cpu], PBM_GETPOS, 0, 0))
-				SendMessage(g_hProgress[g_cpu], PBM_SETPOS, g_progress[g_cpu], 0);
-		}
+		UpdateProgress();
 		return 0;
+	case WM_DPICHANGED:
+	{
+		// Moved to a monitor with a different scale: resize to the rectangle Windows suggests, at the new DPI
+		g_dpi = HIWORD(wParam);
+		UpdateFont();
+		const RECT* rect = (const RECT*)lParam;
+		SetWindowPos(hwnd, 0, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
+		ResizeControls(hwnd);
+		return 0;
+	}
 	case MSG_TEXT:
 		SetText((wchar_t*)wParam, (wchar_t*)lParam);
 		return 0;
@@ -548,7 +707,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		return 0;
 	case MSG_FINISHED:
 		SetEvent(g_hFinished[wParam]);
-		if (WaitForMultipleObjects(g_cpus, g_hFinished, 1, 0) == WAIT_OBJECT_0)
+		if (AllFinished())
 		{
 			StopTimer();
 			SetText(0, 0);
@@ -605,9 +764,7 @@ DWORD WINAPI ThreadProc(LPVOID param)
 		ResetEvent(g_hFinished[n]);
 		while ((WaitForSingleObject(g_hTerminate, 0) != WAIT_OBJECT_0) && (GetNext(filename)))
 		{
-			const size_t bufSize = filename.size() + 1;
-			file = new wchar_t[bufSize];
-			wcscpy_s(file, bufSize, filename.c_str());
+			file = CopyString(filename.c_str());
 			// No lock needed: the decoder list is read-only, and CStream serialises whole-file loads itself
 			decoder = g_decoders->OpenDecoder(filename.c_str());
 			if (decoder)
@@ -615,7 +772,8 @@ DWORD WINAPI ThreadProc(LPVOID param)
 				samplecount = decoder->GetSampleCount();
 				if (!samplecount)
 					samplecount = 0xffffff;
-				PostMessage(g_hProgress[n], PBM_SETRANGE32, 0, (int)(samplecount >> 8));
+				g_progress[n] = 0;
+				g_range[n] = (int)(samplecount >> 8);	// the UI thread's timer applies it
 				total = 0;
 				count = decoder->Read();
 				while ((WaitForSingleObject(g_hTerminate, 0) != WAIT_OBJECT_0) && (count>0))
@@ -624,23 +782,17 @@ DWORD WINAPI ThreadProc(LPVOID param)
 					g_progress[n] = (int)(total >> 8);
 					count = decoder->Read();
 				}
-				if (count<0)
-				{
-					const size_t bufSize = wcslen(decoder->GetLastError()) + 1;
-					error = new wchar_t[bufSize];
-					wcscpy_s(error, bufSize, decoder->GetLastError());
-				}
-				else
-					error = 0;
+				error = (count<0) ? CopyString(decoder->GetLastError()) : 0;
 				delete decoder;
 			}
 			else
+				error = CopyString(STR_FILEERROR);
+			// The UI thread frees the strings, or Cleanup does if the window closes first
+			if (!PostMessage(g_hWnd, MSG_TEXT, (WPARAM)file, (LPARAM)error))
 			{
-				const size_t bufSize = wcslen(STR_FILEERROR) + 1;
-				error = new wchar_t[bufSize];
-				wcscpy_s(error, bufSize, STR_FILEERROR);
+				delete[] file;
+				delete[] error;
 			}
-			PostMessage(g_hWnd, MSG_TEXT, (WPARAM)file, (LPARAM)error);
 			PostMessage(g_hWnd, MSG_PERCENT, 0, 0);
 		}
 		g_progress[n] = 0;

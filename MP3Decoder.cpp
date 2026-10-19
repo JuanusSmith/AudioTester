@@ -4,12 +4,14 @@ CMP3Decoder::CMP3Decoder()
 {
 	m_opened=0;
 	m_error[0]=0;
+	m_freelength=0;
 }
 
 CMP3Decoder::CMP3Decoder(const wchar_t* filename)
 {
 	m_opened=0;
 	m_error[0]=0;
+	m_freelength=0;
 	if(m_stream.Open(filename,m_usemem))
 	{
 		m_opened=1;
@@ -79,6 +81,8 @@ long CMP3Decoder::Read()
 				m_lastheader=m_header;
 				m_rate=m_samplerate;
 			}
+			if(!m_bitrate&&!m_freelength)
+				m_freelength=m_framelength-m_padding*((m_layer==LAYER1)?4:1);
 			m_offset+=m_framelength;
 			if(m_offset<m_filesize)
 			{
@@ -197,7 +201,7 @@ int CMP3Decoder::GetLyricsLength()
 					buf2[5099]=0;
 					char* c=strstr(buf2,"LYRICSBEGIN");
 					if(c)
-						return 5100-(c-buf2);
+						return (int)(5100-(c-buf2));
 					else
 						wcscpy_s(m_error,MAXERROR,L"BAD LYRICS3v1 TAG");
 				}
@@ -280,6 +284,17 @@ int CMP3Decoder::GetFrameLength()
 		m_samplerate=MP3_SAMPRATES[m_samplerate][m_column];
 		if(!m_samplerate)
 			return 0;
+		if(!m_bitrate)
+		{
+			if(((m_header>>12)&0x0f)==0x0f)		// bad bitrate index
+				return 0;
+			// Free format: every frame has the same unpadded length, measured from the first one
+			int length=m_freelength?m_freelength:GetFreeLength();
+			if(!length)
+				return 0;
+			m_samplepos+=(m_layer==LAYER1)?384:((m_layer==LAYER3&&m_version!=MPEG1)?576:1152);
+			return length+m_padding*((m_layer==LAYER1)?4:1);
+		}
 		switch(m_layer)
 		{
 		case LAYER1:
@@ -300,6 +315,31 @@ int CMP3Decoder::GetFrameLength()
 				return 72*m_bitrate/m_samplerate+m_padding;
 			}
 		}
+	}
+	return 0;
+}
+
+int CMP3Decoder::GetFreeLength()
+{
+	// A free format header has no bitrate, so the frame length is the distance to the next header
+	// of the same format, confirmed by the one after that. Called with the stream just past the header.
+	int slot=(m_layer==LAYER1)?4:1;
+	unsigned char buf[MAXFREE];		// buf[0] is 4 bytes into this frame
+	__int64 pos=m_stream.Tell();
+	int size=(int)m_stream.Read(buf,MAXFREE);
+	m_stream.Seek(pos,SEEK_SET);
+	for(int i=MINFREE-4;i+4<=size;i++)
+	{
+		unsigned long header=((unsigned long)buf[i]<<24)|(buf[i+1]<<16)|(buf[i+2]<<8)|buf[i+3];
+		if((header&FREEMASK)!=(m_header&FREEMASK))
+			continue;
+		int length=i+4-m_padding*slot;
+		int j=i+length+((header>>9)&1)*slot;	// where the header after that one should be
+		if(j+4>size)
+			return length;		// past the buffer or the end of the file, so take this one
+		header=((unsigned long)buf[j]<<24)|(buf[j+1]<<16)|(buf[j+2]<<8)|buf[j+3];
+		if((header&FREEMASK)==(m_header&FREEMASK))
+			return length;
 	}
 	return 0;
 }
@@ -333,7 +373,7 @@ bool CMP3Decoder::CheckCRC()
 	if(m_crc&&m_layer==LAYER3)
 	{
 		m_crcbytes=MP3_CRCBYTES[m_mono?1:0][m_version==MPEG1?0:1];
-		if((!m_stream.Seek(-2,SEEK_CUR))&&(m_stream.Read(m_crcbuf,2)==2)&&(m_stream.Read((unsigned char*)&m_crc+1,1))&&(m_stream.Read((unsigned char*)&m_crc,1))&&(m_stream.Read(m_crcbuf+2,m_crcbytes)==m_crcbytes)&&(CRC16(0xffff,m_crcbuf,m_crcbytes+2)!=m_crc))
+		if((!m_stream.Seek(-2,SEEK_CUR))&&(m_stream.Read(m_crcbuf,2)==2)&&(m_stream.Read((unsigned char*)&m_crc+1,1))&&(m_stream.Read((unsigned char*)&m_crc,1))&&(m_stream.Read(m_crcbuf+2,m_crcbytes)==(unsigned long)m_crcbytes)&&(CRC16(0xffff,m_crcbuf,m_crcbytes+2)!=m_crc))
 		{
 			float f=(float)m_samplepos;
 			f/=m_rate;

@@ -5,7 +5,7 @@
 
 size_t read_func(void *ptr, size_t size, size_t nmemb, void *datasource)
 {
-	return ((CStream*)datasource)->Read(ptr,size*nmemb);
+	return ((CStream*)datasource)->Read(ptr,(unsigned long)(size*nmemb));
 }
 
 int seek_func(void *datasource, ogg_int64_t offset, int whence)

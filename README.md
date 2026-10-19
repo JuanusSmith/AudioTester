@@ -1,6 +1,6 @@
 # AudioTester
 
-AudioTester is a small Windows tool that checks **MP3, Ogg Vorbis, FLAC and WavPack** files for errors: corrupt data, truncated files, lost sync and failed CRC or MD5 checks. Drop files or folders onto the window and it tests them in parallel, one worker thread per CPU core, then lists every file that failed (with the reason) and every file that passed.
+AudioTester is a small Windows tool that checks **MP3, Ogg Vorbis, FLAC and WavPack** files for errors: corrupt data, truncated files, lost sync and failed CRC or MD5 checks. Drop files or folders onto the window and it tests them in parallel, one worker thread per logical processor, then lists every file that failed (with the reason) and every file that passed.
 
 AudioTester was written by **James Chapman** ([vuplayer.com](http://www.vuplayer.com)) and released under the MIT license. Version 1.7 came out in 2015. This repository is an **unofficial update of 1.7** with bug fixes, current codec libraries and a Visual Studio 2026 build. All credit for the original program goes to James Chapman. His original readme is included unchanged as [ORIGINAL_README.txt](ORIGINAL_README.txt).
 
@@ -65,12 +65,12 @@ AudioTester was written by **James Chapman** ([vuplayer.com](http://www.vuplayer
 
 The new `tests/` folder holds:
 
-- **`make_test_files.cpp`**: writes known-good files for every format (FLAC with and without a stored length, Ogg Vorbis, WavPack with MD5, and MP3 with and without CRCs or an ID3v2 tag).
+- **`make_test_files.cpp`**: writes known-good files for every format (FLAC with and without a stored length, Ogg Vorbis, WavPack with MD5, and MP3 with and without CRCs or an ID3v2 tag, and in free format).
 - **`make_damaged_files.py`**: makes damaged copies (truncated, flipped bytes, a broken frame header, damaged CRC-protected data, a malformed ID3v2 tag, junk and empty files) and an `expected.txt` listing the right result for each file.
 - **`decoder_test.cpp`**: runs each file through the same decoder loop as the app, in both in-memory and buffered read modes.
-- **`gui_test.ps1`**: starts the real app window, reads its results and checks them against `expected.txt`. It also checks that a second launch with a relative path forwards its file to the open window. Use `-Data` to point it at a network path.
+- **`gui_test.ps1`**: starts the real app window, reads its results and checks them against `expected.txt`. It also checks that the window is per-monitor DPI aware and that a second launch with a relative path forwards its file to the open window. Use `-Data` to point it at a network path.
 
-All 25 test files give the expected result on both the x64 and Win32 builds. On the same files the original 1.7 exe wrongly fails the valid FLAC with an unknown length, ignores the second launch, and finds no files at all on a network path.
+All 29 test files (25 in 1.7.1, plus a free-format MP3 and three damaged copies of it) give the expected result on both the x64 and Win32 builds. On the same files the original 1.7 exe wrongly fails the valid FLAC with an unknown length, ignores the second launch, and finds no files at all on a network path.
 
 ## Building
 
@@ -88,9 +88,16 @@ The output is `x64\Release\AudioTester.exe` and `Release\AudioTester.exe`. This 
 ## Known limitations
 
 - MP3 checking is structural: frame sync, frame lengths, truncation, tags and (where present) frame CRCs. The audio itself is not decoded, so damage inside an MP3 without CRCs can go unnoticed.
-- MP3 files with free-format bitrates are reported as `UNRECOGNISED FORMAT`.
 - Ogg Opus, M4A/AAC/ALAC, WAV/AIFF and APE are not supported.
 - Results can only be copied from the window, not saved to a file.
+
+## Changes since 1.7.1 (not yet released)
+
+- **All processors used:** one worker thread per logical processor across all processor groups, instead of at most 16. With more than 16 threads, one shared progress bar shows overall progress instead of one bar per thread.
+- **Per-monitor DPI:** the window rescales its font and layout when moved to a monitor with a different scale (Windows 10 1703 or later; older Windows falls back to system DPI).
+- **Free-format MP3:** files with a free-format bitrate (bitrate index 0) are checked like other MP3s. The frame length is found from the distance to the next frame header, and every later frame is checked against it.
+- **Closing mid-scan:** result text that worker threads had already sent but the window hadn't shown yet was leaked. It is now freed.
+- The project builds with no warnings at /W4, and `/analyze` reports nothing beyond uninitialized-member style warnings (C26495) on decoder members that are only used after a successful open.
 
 ## Version history
 
